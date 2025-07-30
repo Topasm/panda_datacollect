@@ -51,10 +51,7 @@ class FrankaRobotWrapper:
             P = max(-max_angular_vel, min(max_angular_vel, P))
             Y = max(-max_angular_vel, min(max_angular_vel, Y))
             
-            # Skip if all velocities are zero after clamping
-            if abs(x) < 1e-6 and abs(y) < 1e-6 and abs(z) < 1e-6 and abs(R) < 1e-6 and abs(P) < 1e-6 and abs(Y) < 1e-6:
-                return
-            
+
             # Use franky API for continuous velocity control
             # Create motion with both linear and angular velocity
             linear_velocity = np.array([x, y, z])
@@ -127,9 +124,9 @@ class RealTimeRobotInterface:
         self.robot_state_buffer = SharedMemoryRingBuffer.create_from_examples(
             shm_manager=self.shm_manager,
             examples=robot_state,
-            get_max_k=32,
+            get_max_k=32,  # Keep large buffer for data collection
             get_time_budget=0.1,
-            put_desired_frequency=15
+            put_desired_frequency=1000  # Robot state updates at 1000Hz (every iteration)
         )
 
         # Control threading
@@ -140,6 +137,8 @@ class RealTimeRobotInterface:
         # Movement deltas for real-time control (like reference code)
         self._delta_translation = np.zeros(3, dtype=np.float32)
         self._delta_rotation = np.zeros(3, dtype=np.float32)
+        self._command_timestamp = 0.0  # Track when command was last updated
+        self._command_timeout = 0.2    # Commands expire after 200ms (increased for slower data collection)
         self._command_lock = threading.Lock()
 
         # Gripper control
@@ -252,30 +251,35 @@ class RealTimeRobotInterface:
 
             while not self._stop_event.is_set():
                 try:                    
-                    # Get movement deltas from main thread - scale significantly for velocity control
+                    # Get movement deltas from main thread with command aging
                     with self._command_lock:
-                        # Scale deltas to proper velocities for responsive movement
-                        # Since franky expects velocities (m/s), we need to scale the small deltas up
-                        dpos = self._delta_translation * 10.0   # Scale up for velocity control (10x faster)
-                        drot = self._delta_rotation * 5.0       # Scale up for angular velocity control
+                        current_time = time.time()
+                        # Check if command is too old (stale)
+                        if current_time - self._command_timestamp > self._command_timeout:
+                            # Command is stale, use zero movement
+                            dpos = np.zeros(3, dtype=np.float32)
+                            drot = np.zeros(3, dtype=np.float32)
+                        else:
+                            # Scale deltas to proper velocities for responsive movement
+                            # Since franky expects velocities (m/s), we need to scale the small deltas up
+                            dpos = self._delta_translation * 10.0   # Scale up for velocity control (10x faster)
+                            drot = self._delta_rotation * 5.0       # Scale up for angular velocity control
 
-                    # Use franky's velocity control if there's movement
-                    if np.any(dpos != 0) or np.any(drot != 0):
-                        velocity_cmd = {
-                            "x": float(dpos[0]),
-                            "y": float(dpos[1]), 
-                            "z": float(dpos[2]),
-                            "R": float(drot[0]),
-                            "P": float(drot[1]),
-                            "Y": float(drot[2]),
-                            "is_async": True,
-                        }
-                        self.robot.cartesian_velocity_control(velocity_cmd)
+                    # Always send velocity command - either movement or explicit stop
+                    velocity_cmd = {
+                        "x": float(dpos[0]),
+                        "y": float(dpos[1]), 
+                        "z": float(dpos[2]),
+                        "R": float(drot[0]),
+                        "P": float(drot[1]),
+                        "Y": float(drot[2]),
+                        "is_async": True,
+                    }
+                    self.robot.cartesian_velocity_control(velocity_cmd)
 
-                    # Update state buffer (only every 10th iteration to reduce overhead at 1kHz)
-                    # This gives us 100Hz state updates which is still very frequent
-                    if iteration_count % 10 == 0:
-                        self._update_robot_state()
+                    # Update state buffer every iteration for 1000Hz state updates
+                    # This gives us maximum responsiveness for data collection
+                    self._update_robot_state()
 
                     iteration_count += 1
                     
@@ -371,11 +375,12 @@ class RealTimeRobotInterface:
             pass  # Don't spam errors in real-time loop
 
     def set_movement_delta(self, translation_delta, rotation_delta):
-        """Set movement deltas for real-time control (replaces direct pose setting)."""
+        """Set movement deltas for real-time control with timestamp for command aging."""
         with self._command_lock:
             self._delta_translation = np.array(
                 translation_delta, dtype=np.float32)
             self._delta_rotation = np.array(rotation_delta, dtype=np.float32)
+            self._command_timestamp = time.time()  # Mark when command was set
 
     def set_gripper_button_state(self, button_0_pressed, button_1_pressed):
         """Handle gripper control via button PRESS events with debouncing."""

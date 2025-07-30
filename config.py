@@ -7,15 +7,15 @@ Modify these parameters to customize the behavior.
 ROBOT_IP = "172.16.0.2"  # IP address of the Franka robot
 
 # Control Parameters
-TRANSLATION_SCALE = 5.0    # Increased for more responsive SpaceMouse input
-ROTATION_SCALE = 3.0       # Increased for more responsive rotation
-LOOP_RATE_HZ = 100          # Control loop frequency
+TRANSLATION_SCALE = 3.0    # Increased for more responsive SpaceMouse input
+ROTATION_SCALE = 2.0       # Increased for more responsive rotation
+LOOP_RATE_HZ = 10          # Data collection frequency (robot control runs at 1000Hz independently)
 
 # Data Storage
 DATA_ROOT_DIR = "./my_robot_data"  # Where to save collected data
 
 # SpaceMouse Settings
-SPACEMOUSE_DEADZONE = 0.05  # Reduced deadzone for more sensitive input
+SPACEMOUSE_DEADZONE = 0.02  # Further reduced deadzone for more sensitive zero detection
 
 # Gripper Settings
 GRIPPER_TOGGLE_DEBOUNCE = 0.5  # Minimum time between gripper toggles (seconds)

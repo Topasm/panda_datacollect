@@ -162,7 +162,8 @@ class DataCollectionController:
         try:
             while True:
 
-                # 1. Get current robot state (Observation) - minimize latency
+                # 1. Get current robot state (Observation) from shared memory at precise 10Hz
+                # The robot updates state at 1000Hz, we sample it at 10Hz for data collection
                 current_obs = self.robot.get_obs()
                 current_ee_pose = current_obs['panda_hand_pose']
 
@@ -201,9 +202,9 @@ class DataCollectionController:
                         print(
                             "🗑️ Skipping data recording during episode transition...")
                     elif time.time() - both_buttons_start_time >= 3.0:
-                        recorded_timesteps = step_count // 50  # Actual recorded data points
+                        recorded_timesteps = step_count  # All steps are recorded at 10Hz
                         print(
-                            f"\n🛑 Episode {episode_num} ended by user. Recorded {recorded_timesteps} timesteps ({step_count} control steps).")
+                            f"\n🛑 Episode {episode_num} ended by user. Recorded {recorded_timesteps} timesteps at 10Hz.")
                         break
                 else:
                     both_buttons_start_time = None  # Reset if buttons released
@@ -220,10 +221,10 @@ class DataCollectionController:
                     self.robot.set_gripper_button_state(
                         button_left, button_right)
 
-                # 6. Record the timestep (much less frequently to maintain 10Hz control)
-                # Record every 50th iteration to get ~0.2Hz recording rate at 10Hz control
-                # This ensures control loop stays fast while still capturing essential data
-                if not episode_ending and step_count % 50 == 0:
+                # 6. Record the timestep at precise 10Hz data collection rate
+                # Record every iteration since we're now running at 10Hz data collection frequency
+                # Robot control runs independently at 1000Hz while data is collected at 10Hz
+                if not episode_ending:
                     try:
                         # Get camera images from shared memory (fast, non-blocking)
                         img_primary, img_wrist = self.get_camera_images()
@@ -243,35 +244,38 @@ class DataCollectionController:
                 step_count += 1  # Always increment step count
 
                 # Monitor control loop performance less frequently to reduce overhead
-                # Check every 200 steps (~20 seconds at 10Hz) to reduce console spam
-                if step_count % 200 == 0 and step_count > 0:
+                # Check every 20 steps (2 seconds at 10Hz) to reduce console spam
+                if step_count % 20 == 0 and step_count > 0:
                     actual_hz = self.rate_limiter.get_actual_rate()
-                    recorded_timesteps = step_count // 50  # Actual recorded data points
+                    recorded_timesteps = step_count  # All steps are now recorded at 10Hz
 
-                    # Check if rate is within bounds (9.7-10.3Hz)
+                    # Check if rate is within bounds (9.5-10.5Hz for data collection)
                     if not self.rate_limiter.is_rate_stable():
-                        if actual_hz > 10.3:
+                        if actual_hz > 10.5:
                             print(
-                                f"⚠️ Rate too high: {actual_hz:.2f}Hz > 10.3Hz")
-                        elif actual_hz < 9.7:
+                                f"⚠️ Data collection rate too high: {actual_hz:.2f}Hz > 10.5Hz")
+                        elif actual_hz < 9.5:
                             print(
-                                f"⚠️ Rate too low: {actual_hz:.2f}Hz < 9.7Hz")
+                                f"⚠️ Data collection rate too low: {actual_hz:.2f}Hz < 9.5Hz")
 
+                    # Show control command info for debugging
+                    cmd_age = time.time() - getattr(self.robot, '_command_timestamp', 0)
                     print(
-                        f"📊 Episode {episode_num}: {recorded_timesteps} recorded timesteps ({step_count} control steps) | Control loop: {actual_hz:.2f}Hz")
+                        f"📊 Episode {episode_num}: {recorded_timesteps} recorded timesteps | Data collection: {actual_hz:.2f}Hz | Robot control: 1000Hz | Command age: {cmd_age*1000:.1f}ms")
 
-                # Maintain precise 10Hz control loop using Rate class
+                # Maintain precise 10Hz data collection loop using Rate class
+                # Robot control runs independently at 1000Hz
                 self.rate_limiter.sleep()
 
         except KeyboardInterrupt:
-            recorded_timesteps = step_count // 50  # Actual recorded data points
+            recorded_timesteps = step_count  # All steps are recorded at 10Hz
             print(
-                f"\n🛑 Episode {episode_num} interrupted by Ctrl+C. Recorded {recorded_timesteps} timesteps ({step_count} control steps).")
+                f"\n🛑 Episode {episode_num} interrupted by Ctrl+C. Recorded {recorded_timesteps} timesteps at 10Hz.")
 
         print(f"📁 Saved to: {episode_dir}")
         # Clear any residual control signals after episode
         self._clear_control_signals()
-        recorded_timesteps = step_count // 50  # Return actual recorded timesteps
+        recorded_timesteps = step_count  # Return actual recorded timesteps at 10Hz
         return recorded_timesteps
 
     def _reset_for_new_episode(self):

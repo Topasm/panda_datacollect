@@ -35,6 +35,27 @@ def spacemouse_process(shm_name: str, stop_event):
             try:
                 state = pyspacemouse.read()
                 if state:
+                    # Check if state is effectively zero (within dead zone)
+                    is_zero_state = (
+                        abs(state.x or 0) < 0.01 and abs(state.y or 0) < 0.01 and abs(state.z or 0) < 0.01 and
+                        abs(state.roll or 0) < 0.01 and abs(state.pitch or 0) < 0.01 and abs(state.yaw or 0) < 0.01
+                    )
+                    
+                    # If at zero, try to clear any additional buffered readings to prevent lag
+                    if is_zero_state:
+                        for _ in range(3):  # Clear up to 3 additional buffered readings
+                            try:
+                                extra_state = pyspacemouse.read()
+                                if extra_state:
+                                    # If we find a non-zero reading in the buffer, use it instead
+                                    if not (abs(extra_state.x or 0) < 0.01 and abs(extra_state.y or 0) < 0.01 and 
+                                           abs(extra_state.z or 0) < 0.01 and abs(extra_state.roll or 0) < 0.01 and 
+                                           abs(extra_state.pitch or 0) < 0.01 and abs(extra_state.yaw or 0) < 0.01):
+                                        state = extra_state  # Use the non-zero state
+                                        break
+                            except Exception:
+                                break  # No more buffered readings
+                    
                     # Write the latest state to shared memory (non-blocking)
                     shared_command[0] = state.x or 0.0
                     shared_command[1] = state.y or 0.0
